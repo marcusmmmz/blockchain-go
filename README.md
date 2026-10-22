@@ -15,15 +15,13 @@ ordinary transactions, signatures, or spendable balances yet.
 ```sh
 go mod download
 go build -o bin/blockchain-go .
-# Set the same secret on all participating machines; enter it without echoing:
-read -rsp 'Shared peer token: ' BLOCKCHAIN_PEER_TOKEN; echo
-export BLOCKCHAIN_PEER_TOKEN
 ./bin/blockchain-go --miner alice --workers 4
 ```
 
-Use a randomly generated secret of at least 16 bytes and share it privately.
-The token gates both `/p2p` and `/status`. It is read from the process environment;
-`.env` files are not loaded automatically. Keep tokens out of Git and peer URLs.
+No shared peer token is required. Anyone who can reach the listener or tunnel
+can connect through `/p2p` and read `/status`. Every received block is still
+validated against the same consensus rules. Cloudflare Access can optionally
+restrict who reaches the tunnel.
 
 Useful flags:
 
@@ -69,7 +67,7 @@ Keep tunnel credentials on the host, outside this repository. The node itself
 continues listening on localhost; Cloudflare provides public HTTPS and forwards
 WebSocket upgrades to `/p2p`.
 
-Friends use the same shared peer token and network difficulty:
+Friends use the same network difficulty:
 
 ```sh
 ./bin/blockchain-go --peer wss://chain.example.com/p2p \
@@ -80,7 +78,7 @@ Only the host needs `cloudflared`. If Cloudflare Access protects the hostname,
 create an appropriate Service Auth policy and set `CF_ACCESS_CLIENT_ID` and
 `CF_ACCESS_CLIENT_SECRET` on dialing nodes. Both must be set together. They are
 sent as Cloudflare Access service-token headers on outbound `wss://` connections;
-the application's shared bearer token is still required. Configured service
+no application bearer token is required. Configured service
 credentials apply to all configured WSS peers, so only configure trusted peer
 hostnames. Browser-login redirects are not supported; redirects are rejected.
 
@@ -96,12 +94,11 @@ Automated tests exercise local WebSockets and a TLS reverse proxy instead.
 ## Observe and stop
 
 Every five seconds the node logs height, tip hash, peer count, recent hashes per
-second, canonical wins by miner, and stale-block count. The protected `/status`
+second, canonical wins by miner, and stale-block count. The `/status`
 endpoint returns the same data plus chain ID and cumulative work:
 
 ```sh
-curl --fail -H "Authorization: Bearer $BLOCKCHAIN_PEER_TOKEN" \
-  http://127.0.0.1:7331/status
+curl --fail http://127.0.0.1:7331/status
 ```
 
 Stop with Ctrl+C. Blocks are flushed before being accepted and indexes are rebuilt
@@ -135,11 +132,10 @@ python3 scripts/smoke.py --binary /tmp/blockchain-go
 ```
 
 Tests cover consensus/encoding vectors, difficulty boundaries, invalid blocks,
-fork choice (including a shorter harder chain), replay/corruption, authentication,
+fork choice (including a shorter harder chain), replay/corruption, open peer connections,
 message limits, paginated sync, relaying, reconnects, miner cancellation, and TLS
 proxy upgrades. The separate-process smoke test exercises real mining, a late
 joiner, a host outage, isolated forks, restarts, and final convergence.
 
-This is a private friends experiment. Membership tokens do not prevent admitted
-peers from impersonating miner labels or consuming storage with valid side
-branches. There is no disk pruning, automatic peer discovery, or mining pool.
+This is an experimental chain. Miner labels are self-reported, and peers can
+consume storage with valid side branches. There is no disk pruning, automatic peer discovery, or mining pool.

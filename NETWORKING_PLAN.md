@@ -129,7 +129,7 @@ label limit. Bound peer counts, queues, inbound rates, locator length, and
 missing-parent storage. Set handshake/read/write deadlines; reject malformed
 messages with a WebSocket read limit, including fragmented messages. Use one
 reader and a bounded serialized writer per connection; keep compression disabled
-initially. Authenticate the HTTP upgrade before accepting protocol messages. Deduplicate blocks by hash and
+initially. Deduplicate blocks by hash and
 avoid echoing announcements to the sender. Resolve duplicate connections by
 session ID, reject self-connections, and reconnect with bounded backoff.
 
@@ -158,12 +158,10 @@ optionally expose a second node through its own tunnel and connect everyone to
 both for resilience. Without another reachable node, host downtime interrupts
 communication between friends who have no direct connection.
 
-For this friends experiment, require a shared bearer token on the HTTP upgrade,
-loaded from a local environment variable on each node; never put it in peer URLs
-or logs. This gates membership, not miner-label ownership. Cloudflare Access is
-optional: if enabled, noninteractive node clients need supported service-token
-headers rather than a browser login. Keep Access credentials separate from the
-application token and out of configuration committed to Git.
+Peer connections and status are open by default; no application token is
+required. Every received block must pass consensus validation. Cloudflare Access
+is optional: if enabled, noninteractive node clients need supported service-token
+headers rather than a browser login. Keep Access credentials out of Git.
 
 Use WebSocket ping/pong keepalives, deadlines, and reconnect with jittered backoff.
 Cloudflare or origin restarts can close long-lived connections; on reconnect,
@@ -195,10 +193,10 @@ directory lock. Keep generated state outside tracked files.
    cancellation, including a remote block arriving during local completion.
 4. **Peer transport and synchronization:** framing, handshake, bounded messages,
    reconnects, block relay, and locator synchronization. Test wrong chain/version,
-   malformed/oversized messages, missing/incorrect upgrade authentication, unknown
+   malformed/oversized messages, open upgrades without credentials, unknown
    parents, idle keepalives, and a late joining node.
 5. **CLI and friends rehearsal:** wire `--listen`, repeatable URL-valued `--peer`,
-   `--miner`, `--workers`, `--mine`, and `--data-dir`; document launch, bearer-token setup, and Cloudflare Tunnel
+   `--miner`, `--workers`, `--mine`, and `--data-dir`; document launch and Cloudflare Tunnel
    steps. Run three local processes with separate data directories and fixed
    test difficulty, then repeat on two real machines through an actual Cloudflare Tunnel.
 
@@ -215,7 +213,6 @@ Cloudflare Tunnel rehearsal explicitly unverified until it has actually run.
 Proposed CLI after implementation:
 
 ```sh
-# Set the same BLOCKCHAIN_PEER_TOKEN securely on every node first.
 # Initial peer; named tunnel forwards chain.example.com to this local listener:
 blockchain-go --listen 127.0.0.1:7331 --miner alice --data-dir ./alice-data
 

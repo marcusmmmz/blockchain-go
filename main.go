@@ -40,7 +40,7 @@ func run() error {
 		return err
 	}
 	// Validate options before creating persistent state.
-	opts := NodeOptions{Token: os.Getenv("BLOCKCHAIN_PEER_TOKEN"), Peers: peers, AccessID: os.Getenv("CF_ACCESS_CLIENT_ID"), AccessSecret: os.Getenv("CF_ACCESS_CLIENT_SECRET"), Miner: *miner, Workers: *workers, Mine: *mine}
+	opts := NodeOptions{Peers: peers, AccessID: os.Getenv("CF_ACCESS_CLIENT_ID"), AccessSecret: os.Getenv("CF_ACCESS_CLIENT_SECRET"), Miner: *miner, Workers: *workers, Mine: *mine}
 	if _, err := newNode(newChain(cfg), opts); err != nil {
 		return err
 	}

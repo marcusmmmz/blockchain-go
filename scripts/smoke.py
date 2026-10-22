@@ -9,7 +9,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import secrets
 import socket
 import subprocess
 import tempfile
@@ -22,8 +21,8 @@ def main():
     parser.add_argument("--binary", required=True)
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
-    token = secrets.token_hex(32)
-    process_env = dict(os.environ, BLOCKCHAIN_PEER_TOKEN=token)
+    process_env = dict(os.environ)
+    process_env.pop("BLOCKCHAIN_PEER_TOKEN", None)
     with tempfile.TemporaryDirectory(prefix="blockchain-smoke-") as directory:
         root = Path(directory)
         processes, logs = {}, []
@@ -41,7 +40,6 @@ def main():
         def status(index):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{ports[index]}/status",
-                headers={"Authorization": f"Bearer {token}"},
             )
             with opener.open(request, timeout=1) as response:
                 return json.load(response)

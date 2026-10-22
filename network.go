@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +42,6 @@ type peer struct {
 	cancel   context.CancelFunc
 }
 type NodeOptions struct {
-	Token        string
 	Peers        []string
 	AccessID     string
 	AccessSecret string
@@ -84,9 +81,6 @@ func validPeerURL(raw string) error {
 	return errors.New("remote peers require wss://; ws:// is allowed only for loopback development")
 }
 func newNode(c *Chain, o NodeOptions) (*Node, error) {
-	if len(o.Token) < 16 {
-		return nil, errors.New("BLOCKCHAIN_PEER_TOKEN must contain at least 16 bytes")
-	}
 	if (o.AccessID == "") != (o.AccessSecret == "") {
 		return nil, errors.New("set both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, or neither")
 	}
@@ -110,18 +104,9 @@ func newNode(c *Chain, o NodeOptions) (*Node, error) {
 	}
 	return n, nil
 }
-func (n *Node) authorized(r *http.Request) bool {
-	expected := sha256.Sum256([]byte("Bearer " + n.options.Token))
-	actual := sha256.Sum256([]byte(r.Header.Get("Authorization")))
-	return subtle.ConstantTimeCompare(expected[:], actual[:]) == 1
-}
 func (n *Node) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/p2p", func(w http.ResponseWriter, r *http.Request) {
-		if !n.authorized(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		select {
 		case n.slots <- struct{}{}:
 			defer func() { <-n.slots }()
@@ -136,10 +121,6 @@ func (n *Node) handler() http.Handler {
 		n.session(n.ctx, conn, false)
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		if !n.authorized(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(n.Status())
 	})
@@ -233,7 +214,6 @@ func (n *Node) dialLoop(address string) {
 			return
 		}
 		h := http.Header{}
-		h.Set("Authorization", "Bearer "+n.options.Token)
 		if strings.HasPrefix(address, "wss://") && n.options.AccessID != "" {
 			h.Set("CF-Access-Client-Id", n.options.AccessID)
 			h.Set("CF-Access-Client-Secret", n.options.AccessSecret)

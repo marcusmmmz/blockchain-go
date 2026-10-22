@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,8 +17,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-const testToken = "friends-experiment-test-token"
-
 type runningNode struct {
 	n    *Node
 	url  string
@@ -28,7 +25,7 @@ type runningNode struct {
 
 func startTestNode(t *testing.T, c *Chain, peers ...string) runningNode {
 	t.Helper()
-	n, err := newNode(c, NodeOptions{Token: testToken, Peers: peers, Workers: 1, Miner: "test"})
+	n, err := newNode(c, NodeOptions{Peers: peers, Workers: 1, Miner: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +39,6 @@ func startTestNode(t *testing.T, c *Chain, peers ...string) runningNode {
 	base := "http://" + l.Addr().String()
 	waitFor(t, func() bool {
 		req, _ := http.NewRequest("GET", base+"/status", nil)
-		req.Header.Set("Authorization", "Bearer "+testToken)
 		res, e := http.DefaultClient.Do(req)
 		if e != nil {
 			return false
@@ -85,7 +81,7 @@ func connectProtocol(t *testing.T, r runningNode, version int, chain Hash) (*web
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	conn, _, err := websocket.Dial(ctx, r.peerURL(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testToken}}})
+	conn, _, err := websocket.Dial(ctx, r.peerURL(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,18 +97,11 @@ func connectProtocol(t *testing.T, r runningNode, version int, chain Hash) (*web
 	}
 	return conn, ctx
 }
-func TestUpgradeAuthenticationAndPeerURLValidation(t *testing.T) {
+func TestOpenUpgradeAndPeerURLValidation(t *testing.T) {
 	r := startTestNode(t, testChain())
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	for _, token := range []string{"", "wrong"} {
-		conn, res, err := websocket.Dial(ctx, r.peerURL(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}}})
-		if conn != nil {
-			conn.CloseNow()
-		}
-		if err == nil || res == nil || res.StatusCode != 401 {
-			t.Fatal("unauthenticated upgrade accepted")
-		}
+	conn, ctx := connectProtocol(t, r, protocolVersion, r.n.chain.config.ID())
+	if m, err := readMessage(ctx, conn); err != nil || m.Type != "getblocks" {
+		t.Fatal("peer without credentials could not synchronize", err)
 	}
 	for _, raw := range []string{"tcp://host:1/p2p", "ws://example.com/p2p", "wss://user:password@example.com/p2p", "wss://example.com/p2p?token=secret", "https://example.com/p2p"} {
 		if validPeerURL(raw) == nil {
@@ -224,7 +213,7 @@ func TestWebSocketThroughTLSReverseProxy(t *testing.T) {
 	defer proxy.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(proxy.URL, "https")+"/p2p", &websocket.DialOptions{HTTPClient: proxy.Client(), HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testToken}}})
+	conn, _, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(proxy.URL, "https")+"/p2p", &websocket.DialOptions{HTTPClient: proxy.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +241,7 @@ func TestWebSocketThroughTLSReverseProxy(t *testing.T) {
 func TestMiningPartitionsCancellationAndRemoteTip(t *testing.T) {
 	c := testChain()
 	p, _ := c.snapshot()
-	n, _ := newNode(c, NodeOptions{Token: testToken, Workers: 2, Miner: "alice"})
+	n, _ := newNode(c, NodeOptions{Workers: 2, Miner: "alice"})
 	b := candidate(p, "alice", Hash{1}, p.block.Header.Timestamp+1)
 	for i := 0; i < 2; i++ {
 		found := make(chan Block, 1)
@@ -274,7 +263,7 @@ func TestMiningPartitionsCancellationAndRemoteTip(t *testing.T) {
 	}
 	// An actual mining loop must follow a newly received tip and keep producing.
 	c = newChain(Config{InitialBits: 18})
-	n, _ = newNode(c, NodeOptions{Token: testToken, Workers: 1, Miner: "alice"})
+	n, _ = newNode(c, NodeOptions{Workers: 1, Miner: "alice"})
 	r := startTestNode(t, c)
 	mineCtx, stop := context.WithCancel(context.Background())
 	miningDone := make(chan struct{})
@@ -294,24 +283,16 @@ func TestMiningPartitionsCancellationAndRemoteTip(t *testing.T) {
 	waitFor(t, func() bool { s := c.Status(); return s.Height > tip.height+1 && s.Wins["bob"] == 1 })
 	_ = r
 }
-func TestStatusRequiresToken(t *testing.T) {
+func TestStatusWithoutCredentials(t *testing.T) {
 	r := startTestNode(t, testChain())
 	res, err := http.Get(r.url + "/status")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	io.Copy(io.Discard, res.Body)
-	if res.StatusCode != 401 {
-		t.Fatal("status must require token")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status without credentials returned %d", res.StatusCode)
 	}
-	req, _ := http.NewRequest("GET", r.url+"/status", nil)
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
 	var s NodeStatus
 	if err = json.NewDecoder(res.Body).Decode(&s); err != nil {
 		t.Fatal(err)
@@ -354,7 +335,7 @@ func TestPeerIdentityDeduplicationAndSelfConnection(t *testing.T) {
 	// Verify self identity is rejected in the initial hello too.
 	ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	self, _, err := websocket.Dial(ctx2, a.peerURL(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testToken}}})
+	self, _, err := websocket.Dial(ctx2, a.peerURL(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

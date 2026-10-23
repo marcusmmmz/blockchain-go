@@ -107,13 +107,26 @@ writers. An incomplete final record is removed after a crash; checksum failures
 or invalid complete records stop startup rather than silently discarding data.
 A storage failure stops the running node. Back up the data directory while stopped.
 
-The network targets ten-second blocks and adjusts every 60 blocks. Initial bits
-22 is a starting guess, not a calibrated speed guarantee. Use the reported hash
-rate to estimate initial bits: approximately `log2(total hashes/second * 10)`.
-To change initial difficulty, everyone must agree, stop, and use new data
-folders; the setting is part of the chain identity. Difficulty adjustments are
-bounded to a factor of four. The first adjustment measures heights 1 through 59 (58 time intervals),
-excluding the historical genesis timestamp; subsequent windows use 60 intervals.
+The network targets ten-second blocks and adjusts difficulty after every block
+using only that block's timestamp and its parent's timestamp. An interval under
+10 seconds raises the next block's difficulty by 1%; over 10 seconds lowers it
+by 1%; exactly 10 seconds leaves it unchanged. The first mined block uses the
+initial target; its interval with genesis determines the second block's target.
+Since difficulty is inverse to target, the target is multiplied by `100/101`
+for a fast block or `100/99` for a slow block, rounded down and bounded to
+`1..2^256-1`. Equal or decreasing timestamps count as fast; timestamp validity
+still uses the existing median-time and future-time checks. There is no averaging
+window or adjustment based on how far the interval missed the goal.
+
+Initial bits 22 is a starting guess, not a calibrated speed guarantee. Use the
+reported hash rate to estimate initial bits: approximately
+`log2(total hashes/second * 10)`. To change initial difficulty, everyone must agree,
+stop, and use new data folders; the setting is part of the chain identity.
+
+**DAA compatibility:** this rule uses protocol version 2 and a new chain ID.
+All participants must upgrade and start with fresh data directories; existing
+version-1 chain data is rejected rather than replayed under different rules.
+
 Keep machine clocks synchronized. Extremely easy settings can outrun the allowed
 timestamp window and temporarily pause mining until wall time catches up.
 

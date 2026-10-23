@@ -13,8 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const protocolVersion = 1
-const adjustmentInterval = 60
+const protocolVersion = 2
 const targetSpacing = 10
 const maxBlockSize = 64 << 10
 
@@ -105,7 +104,7 @@ func (c Config) genesis() Block {
 }
 func (c Config) ID() Hash {
 	// Version commits to encoding, timestamp, reward, fork-choice and difficulty rules.
-	return sha256.Sum256([]byte(fmt.Sprintf("blockchain-go/v%d/spacing=%d/interval=%d/genesis=%s", protocolVersion, targetSpacing, adjustmentInterval, c.genesis().hash())))
+	return sha256.Sum256([]byte(fmt.Sprintf("blockchain-go/v%d/spacing=%d/daa=per-block-difficulty-1pct/genesis=%s", protocolVersion, targetSpacing, c.genesis().hash())))
 }
 
 type entry struct {
@@ -125,34 +124,28 @@ func medianTime(p *entry) uint64 {
 	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 	return times[len(times)/2]
 }
+
+// expectedTarget uses only the last completed interval on this branch. Its
+// adjustment applies to the next block, whose target must be known before mining.
 func expectedTarget(p *entry) Hash {
-	if (p.height+1)%adjustmentInterval != 0 {
+	if p.parent == nil {
 		return p.block.Header.Target
 	}
-	ancestor := p
-	steps := adjustmentInterval
-	if p.height < uint64(steps) {
-		// Exclude the fixed historical genesis from the first live window.
-		steps = int(p.height) - 1
-	}
-	for i := 0; i < steps; i++ {
-		ancestor = ancestor.parent
-	}
-	expected := uint64(steps * targetSpacing)
-	// A branch's timestamps need not increase on every block. Avoid unsigned underflow.
-	elapsed := uint64(1)
-	if p.block.Header.Timestamp > ancestor.block.Header.Timestamp {
-		elapsed = p.block.Header.Timestamp - ancestor.block.Header.Timestamp
-	}
-	if elapsed < expected/4 {
-		elapsed = expected / 4
-	}
-	if elapsed > expected*4 {
-		elapsed = expected * 4
-	}
+	previousTime := p.parent.block.Header.Timestamp
+	currentTime := p.block.Header.Timestamp
 	t := p.block.Header.Target.integer()
-	t.Mul(t, new(big.Int).SetUint64(elapsed))
-	t.Div(t, new(big.Int).SetUint64(expected))
+	switch {
+	case currentTime <= previousTime || currentTime-previousTime < targetSpacing:
+		// Difficulty is inversely proportional to target: D * 1.01 => T / 1.01.
+		t.Mul(t, big.NewInt(100))
+		t.Div(t, big.NewInt(101))
+	case currentTime-previousTime > targetSpacing:
+		// D * 0.99 => T / 0.99, rather than simply adding 1% to the target.
+		t.Mul(t, big.NewInt(100))
+		t.Div(t, big.NewInt(99))
+	default:
+		return p.block.Header.Target
+	}
 	if t.Sign() < 1 {
 		t.SetInt64(1)
 	}
@@ -161,6 +154,7 @@ func expectedTarget(p *entry) Hash {
 	}
 	return targetHash(t)
 }
+
 func validateBlock(b Block, p *entry, now uint64) error {
 	if b.Header.Previous != p.hash {
 		return errParent

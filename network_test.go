@@ -118,7 +118,7 @@ func TestProtocolRejectsWrongNetworkAndVersion(t *testing.T) {
 	for _, tc := range []struct {
 		version int
 		chain   Hash
-	}{{2, (Config{InitialBits: 1}).ID()}, {1, (Config{InitialBits: 2}).ID()}} {
+	}{{protocolVersion + 1, (Config{InitialBits: 1}).ID()}, {1, (Config{InitialBits: 1}).ID()}, {protocolVersion, (Config{InitialBits: 2}).ID()}} {
 		r := startTestNode(t, testChain())
 		conn, ctx := connectProtocol(t, r, tc.version, tc.chain)
 		if _, err := readMessage(ctx, conn); err == nil {

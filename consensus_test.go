@@ -66,7 +66,7 @@ func TestCanonicalEncoding(t *testing.T) {
 	}
 	cfg := Config{InitialBits: 22}
 	// Golden vectors pin genesis, config identity, and encoding across future changes.
-	if cfg.genesis().hash().String() != "987b84929d131a7865006bdff4a9f8f4fcad94db252c2a995ab1967061422f57" || cfg.ID().String() != "bdf69cf0c917fc9217842a1c8007149bd542a3cd776b4f8bbd90f391df222fb3" {
+	if cfg.genesis().hash().String() != "987b84929d131a7865006bdff4a9f8f4fcad94db252c2a995ab1967061422f57" || cfg.ID().String() != "cc7af83f3c81b1c68e75130cc2f964f11125f4ada46e82ce607b08d4b9a5769e" {
 		t.Fatal("genesis or chain identity changed")
 	}
 	bytes, err := json.Marshal(h)
@@ -138,48 +138,66 @@ func syntheticBranch(last uint64, step uint64, target Hash) *entry {
 	}
 	return p
 }
-func TestDifficultyBoundaries(t *testing.T) {
-	target := (Config{InitialBits: 4}).initialTarget()
-	for _, height := range []uint64{58, 60, 118, 120} {
-		p := syntheticBranch(height, 10, target)
-		if expectedTarget(p) != target {
-			t.Fatalf("unexpected adjustment at height %d", height+1)
-		}
+func TestPerBlockDifficulty(t *testing.T) {
+	// Exact integer vectors distinguish a 1% difficulty change from a 1% target change.
+	cases := []struct {
+		name              string
+		previous, current uint64
+		target, want      int64
+	}{
+		{"fast", 91, 100, 10100, 10000},
+		{"slow", 89, 100, 9900, 10000},
+		{"on-time", 90, 100, 10100, 10100},
+		{"same-second", 100, 100, 10100, 10000},
+		{"backward-time", 101, 100, 10100, 10000},
+		{"very-slow", 1, 1000000000, 9900, 10000},
+		{"fast-rounding", 91, 100, 100, 99},
+		{"slow-rounding", 89, 100, 100, 101},
+		{"minimum-target", 91, 100, 1, 1},
 	}
-	for _, height := range []uint64{59, 119} {
-		for _, step := range []uint64{1, 10, 1000} {
-			p := syntheticBranch(height, step, target)
-			got := expectedTarget(p).integer()
-			steps := uint64(60)
-			if height == 59 {
-				steps = 58
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, height := range []uint64{1, 2, 58, 59, 60, 119} {
+				p := syntheticBranch(height, 10, targetHash(big.NewInt(tc.target)))
+				p.block.Header.Timestamp = tc.current
+				p.parent.block.Header.Timestamp = tc.previous
+				if got := expectedTarget(p).integer(); got.Cmp(big.NewInt(tc.want)) != 0 {
+					t.Fatalf("height %d: target %s, want %d", height, got, tc.want)
+				}
 			}
-			expected := steps * 10
-			elapsed := steps * step
-			if elapsed < expected/4 {
-				elapsed = expected / 4
-			}
-			if elapsed > expected*4 {
-				elapsed = expected * 4
-			}
-			want := target.integer()
-			want.Mul(want, new(big.Int).SetUint64(elapsed))
-			want.Div(want, new(big.Int).SetUint64(expected))
-			if got.Cmp(want) != 0 {
-				t.Fatalf("boundary %d step %d: %s != %s", height, step, got, want)
-			}
-		}
+		})
 	}
-	p := syntheticBranch(119, 10, target)
-	p.block.Header.Timestamp = 1
-	if expectedTarget(p).integer().Cmp(target.integer()) >= 0 {
-		t.Fatal("timestamp underflow made target easier")
-	}
-	p = syntheticBranch(119, 1000, targetHash(maxTarget))
+	p := syntheticBranch(1, 11, targetHash(maxTarget))
 	if expectedTarget(p).integer().Cmp(maxTarget) != 0 {
 		t.Fatal("maximum target not clamped")
 	}
+	g := syntheticBranch(0, 10, (Config{InitialBits: 4}).initialTarget())
+	if expectedTarget(g) != g.block.Header.Target {
+		t.Fatal("first mined block must use the initial target")
+	}
 }
+func TestDifficultyIgnoresOlderIntervals(t *testing.T) {
+	p := syntheticBranch(10, 9, (Config{InitialBits: 4}).initialTarget())
+	want := expectedTarget(p)
+	for ancestor := p.parent.parent; ancestor != nil; ancestor = ancestor.parent {
+		ancestor.block.Header.Timestamp += 100000000
+	}
+	if got := expectedTarget(p); got != want {
+		t.Fatal("older timestamps affected the two-block adjustment")
+	}
+}
+func TestBlockRejectsUnadjustedTarget(t *testing.T) {
+	c := testChain()
+	g, _ := c.snapshot()
+	p := addTest(t, c, child(t, g, "alice", g.block.Header.Timestamp+9))
+	b := child(t, p, "alice", p.block.Header.Timestamp+9)
+	b.Header.Target = p.block.Header.Target
+	b = solve(t, b)
+	if _, _, err := c.Add(b); err == nil {
+		t.Fatal("accepted valid PoW with an unadjusted target")
+	}
+}
+
 func TestForkChoiceAndTipNotification(t *testing.T) {
 	c := testChain()
 	g, notify := c.snapshot()
@@ -195,7 +213,7 @@ func TestForkChoiceAndTipNotification(t *testing.T) {
 	}
 	b2 := addTest(t, c, child(t, b, "bob", b.block.Header.Timestamp+1))
 	if tip, _ := c.snapshot(); tip != b2 {
-		t.Fatal("longer equal-difficulty branch did not win")
+		t.Fatal("greater-work branch did not win")
 	}
 	s := c.Status()
 	if s.Wins["bob"] != 2 || s.Wins["alice"] != 0 || s.Stale != 1 {
@@ -223,18 +241,6 @@ func TestShorterHarderBranchWins(t *testing.T) {
 	}
 }
 
-func TestFirstAdjustmentExcludesGenesisTime(t *testing.T) {
-	target := (Config{InitialBits: 4}).initialTarget()
-	p := syntheticBranch(59, 10, target)
-	for e := p; e != nil; e = e.parent {
-		if e.height > 0 {
-			e.block.Header.Timestamp += 100000000
-		}
-	}
-	if expectedTarget(p) != target {
-		t.Fatal("historical genesis distorted live difficulty")
-	}
-}
 func TestFutureBlockCanBeRetried(t *testing.T) {
 	c := testChain()
 	p, _ := c.snapshot()

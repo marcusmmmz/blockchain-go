@@ -44,7 +44,7 @@ can accept each other's blocks.
 ### 1. Shared consensus rules
 
 Define a versioned network configuration with fixed genesis bytes, initial
-target, maximum target, ten-second target spacing, and adjustment interval.
+target, maximum target, ten-second target spacing, and the per-block 1% difficulty rule.
 Compute a chain ID from the canonical configuration, including genesis; peers
 with different rules must fail the handshake. Ship a single default friends
 network configuration rather than let every miner choose its own target.
@@ -58,16 +58,16 @@ shape and commitment; this is a single-transaction commitment until multiple
 transactions and a real Merkle tree are introduced.
 
 Derive expected target from the candidate's parent branch, never local arrival
-order or a peer's claimed target. Define height zero as genesis. At candidate
-heights divisible by 60, compare parent time with ancestor time at height
-parentHeight-60: 60 intervals, expected duration 600 seconds. Specify a
-deterministic first adjustment at height 60, where that ancestor does not
-exist: compare parent (height 59) with the first mined block (height 1) over
-58 intervals, expected duration 580 seconds. Exclude the historical genesis
-time so it cannot distort the first live adjustment. Clamp the elapsed/expected ratio to
-[1/4, 4], apply integer arithmetic, and clamp the resulting target to bounds.
-All other heights inherit their parent's target. Lock this rule down with
-boundary vectors before implementation grows.
+order or a peer's claimed target. Compare only the most recent completed block
+with its parent: intervals below ten seconds raise the next block's difficulty
+by 1%, intervals above ten seconds lower it by 1%, and exactly ten seconds
+leaves it unchanged. Use target multipliers `100/101` and `100/99` respectively,
+with integer division rounding down and targets clamped to `1..2^256-1`.
+Equal or decreasing timestamps count as fast without unsigned subtraction.
+The first mined block uses the configured initial target; thereafter every
+completed interval, including the first block versus genesis, drives an update.
+Protocol version 2 and a new chain ID separate these rules from the old 60-block
+retarget. Existing version-1 data directories cannot be reused.
 
 Require timestamps greater than median time of up to 11 ancestors and no more
 than two minutes ahead of local time. Treat future-dated blocks as temporarily
@@ -186,8 +186,7 @@ directory lock. Keep generated state outside tracked files.
    encoding vectors, invalid PoW/target/coinbase/time, and adjustment boundaries.
 2. **Chain manager and fork choice:** branch index, cumulative work,
    reorganizations, persistence, and replay. Test a shorter harder branch
-   beating a longer easier branch, ties, duplicates, forks crossing adjustment
-   boundaries, restart, partial final writes, and corrupted records.
+   beating a longer easier branch, ties, duplicates, forks with different per-block adjustments, restart, partial final writes, and corrupted records.
 3. **Cancelable parallel miner:** worker partitioning, tip notifications, worker
    counts, hash-rate reporting, and graceful shutdown. Test distinct jobs and
    cancellation, including a remote block arriving during local completion.
